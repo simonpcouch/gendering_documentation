@@ -1,0 +1,229 @@
+---
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file carries out data analysis and visualization for a paper on documentation practices of R packages.
+
+First, load in the relevant data and packages.
+
+```{r load-data, warning = FALSE, message = FALSE}
+# load in packages
+library(tidyverse)
+library(infer)
+
+# load in data
+packages <- read_csv("data/packages.csv")
+functions <- read_csv("data/functions.csv")
+load("data/packages_summary.Rda")
+```
+
+Taking a glimpse...
+
+```{r glimpse}
+glimpse(packages)
+
+glimpse(functions)
+```
+
+First, we'll join these data to add on package camp and mutate some new columns that will be useful for analysis and visualization.
+
+```{r join-mutate}
+# add on tidy/not-tidy to the functions dataframe
+functions <- packages %>%
+  select(package, camp, is_tidy) %>%
+  left_join(functions)
+
+functions <- functions %>%
+  mutate(n_char_per_function = case_when(
+           n_functions != 0 & (!is.na(n_functions)) ~ n_char/n_functions,
+           TRUE ~ NA_real_),
+         examples_per_function = case_when(
+           n_functions != 0 & (!is.na(n_functions)) ~ n_examples /n_functions,
+           TRUE ~ NA_real_),
+         comments_per_function = case_when(
+           n_functions != 0 & (!is.na(n_functions)) ~ n_example_comments/n_functions,
+           TRUE ~ NA_real_
+           ),
+         comments_per_example = case_when(
+           n_examples  != 0 ~ n_example_comments/n_examples ,
+           TRUE ~ NA_real_
+           ),
+         has_examples = case_when(
+           n_examples > 0 ~ TRUE,
+           TRUE ~ FALSE
+           )
+         )
+```
+
+First, we'll carry out some analyses at the package level.
+
+```{r package-analyses}
+# difference in proportion of packages with vignettes ------------------
+# find the point estimate
+diff_prop_has_vignettes <- packages %>%
+  mutate(has_vignettes = case_when(
+    num_vignettes > 0 ~ TRUE,
+    TRUE ~ FALSE
+  )) %>%
+  group_by(is_tidy) %>%
+  summarize(mean_has_vignettes = mean(has_vignettes)) %>%
+  select(mean_has_vignettes) %>%
+  pull() %>%
+  diff()
+
+
+diff_prop_has_vignettes
+
+# generate the null distribution and get the p-value
+packages %>%
+  mutate(has_vignettes = case_when(
+    num_vignettes > 0 ~ TRUE,
+    TRUE ~ FALSE)
+    ) %>%
+  specify(has_vignettes ~ is_tidy, success = "TRUE") %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in props", order = c("TRUE", "FALSE")) %>%
+  get_p_value(obs_stat = diff_prop_has_vignettes, direction = "both")
+
+
+# difference in proportion of packages with master help-files --------------
+# find the point estimate
+diff_prop_has_master_help <- packages %>%
+  group_by(is_tidy) %>%
+  summarize(mean_has_master_help = mean(has_master_help)) %>%
+  select(mean_has_master_help) %>%
+  pull() %>%
+  diff()
+
+diff_prop_has_master_help
+
+# generate the null distribution and get the p-value
+packages %>%
+  specify(has_master_help ~ is_tidy, success = "TRUE") %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in props", order = c("TRUE", "FALSE")) %>%
+  get_p_value(obs_stat = diff_prop_has_master_help, direction = "both")
+```
+
+Now, moving on to function-level analyses,
+
+```{r function-level}
+# difference in mean char count of function help-files --------------
+# find the point estimate
+diff_mean_n_char <- functions %>%
+  group_by(is_tidy) %>%
+  summarize(mean_n_char = mean(n_char, na.rm = TRUE)) %>%
+  select(mean_n_char) %>%
+  pull() %>%
+  diff()
+
+diff_mean_n_char
+
+# generate the null distribution and get the p-value
+functions %>%
+  specify(n_char ~ is_tidy) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("TRUE", "FALSE")) %>%
+  get_p_value(obs_stat = diff_mean_n_char, direction = "both")
+
+
+# difference in mean number of examples in function help-files --------------
+# find the point estimate
+diff_mean_n_examples <- functions %>%
+  group_by(is_tidy) %>%
+  summarize(mean_n_examples = mean(n_examples, na.rm = TRUE)) %>%
+  select(mean_n_examples) %>%
+  pull() %>%
+  diff()
+
+diff_mean_n_examples
+
+# generate the null distribution and get the p-value
+functions %>%
+  specify(n_examples ~ is_tidy) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("TRUE", "FALSE")) %>%
+  get_p_value(obs_stat = diff_mean_n_examples, direction = "both")
+
+
+# difference in mean number of comments in function help-file examples ----------
+# find the point estimate
+diff_mean_n_example_comments <- functions %>%
+  group_by(is_tidy) %>%
+  summarize(mean_n_example_comments = mean(n_example_comments, na.rm = TRUE)) %>%
+  select(mean_n_example_comments) %>%
+  pull() %>%
+  diff()
+
+diff_mean_n_example_comments
+
+# generate the null distribution and get the p-value
+functions %>%
+  specify(n_example_comments ~ is_tidy) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("TRUE", "FALSE")) %>% 
+  get_p_value(obs_stat = diff_mean_n_example_comments, direction = "both")
+
+# difference in mean number of functions per help-file --------------
+# find the point estimate
+diff_mean_n_functions <- functions %>%
+  group_by(is_tidy) %>%
+  summarize(mean_n_functions = mean(n_functions, na.rm = TRUE)) %>%
+  select(mean_n_functions) %>%
+  pull() %>%
+  diff()
+
+diff_mean_n_functions
+
+# generate the null distribution and get the p-value
+functions %>%
+  specify(n_functions ~ is_tidy) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1e4, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("TRUE", "FALSE")) %>% 
+  get_p_value(obs_stat = diff_mean_n_functions, direction = "both")
+```
+
+To give context on the distribution of download numbers for packages in and out of the tidyverse,
+
+```{r, warning = FALSE, message = FALSE}
+# plot this difference
+downloads_by_camp_viz <- pkgs_sum %>%
+  mutate("Package Camp" = case_when(
+    is_tidy ~ "Tidyverse",
+    TRUE ~ "Non-Tidyverse"
+  )) %>%
+  ggplot() +
+  aes(x = downloads_last_month, col = `Package Camp`) +
+  geom_density() + 
+  scale_x_log10() + 
+  labs(x = "Log(Downloads Last Month)",
+       y = "Relative Density") + 
+  theme_minimal() +
+  scale_color_brewer(type = "qual", palette = 1) +
+  theme(text = element_text(family = "serif"))
+
+downloads_by_camp_viz
+
+# ...and save it!
+ggsave(plot = downloads_by_camp_viz, 
+       filename = "paper/figures/downloads_by_camp.png",
+       width = 6, height = 4, units = "in")
+
+# find observed difference (this is a population parameter)
+pkgs_sum %>%
+  group_by(is_tidy) %>%
+  summarize(mean_num_dls = mean(downloads_last_month, na.rm = TRUE),
+            n = n())
+```
+
+

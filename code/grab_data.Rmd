@@ -1,0 +1,338 @@
+---
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file documents the workflow to gather a sample of help-files from the Comprehensive R Archive Network (CRAN). The workflow should look something like the following:
+
+* Gather a list of all packages on CRAN
+* Take a sample of 1) tidyverse packages and 2) CRAN-published packages that are not in the tidyverse.
+* Grab all of the help-files within these packages.
+* Summarize the help-files into a tabular, tidy format.
+
+First, we'll load relevant packages. Several packages are loaded below which provide different functionality to interface with CRAN data.
+
+```{r packages, warning = FALSE, message = FALSE}
+# tools for working with tidy data
+library(tidyverse)
+library(rvest)
+
+# interfacing with cran logs
+library(cranlogs)
+
+# grab plain-text help-files
+library(gbRd)
+```
+
+Now, we want a list of all packages on CRAN.
+
+```{r grab-package-list, cache = TRUE}
+# read in the table of all packages
+raw_pkgs <- read_html("https://cran.r-project.org/web/packages/available_packages_by_name.html") %>%
+  html_node("table") %>%
+  html_table(fill = TRUE, 
+             header = TRUE)
+
+# give the table new column names
+colnames(raw_pkgs) <- c("name", "desc")
+
+# check out the first few rows
+head(raw_pkgs)
+```
+
+We want to take a sample of packages to grab raw help-files from. To control for package usage, though, we want the distribution of usership for the non-tidyverse-core set to look similar to that of the tidyverse core packages (under the assumption that more popular packages follow different documentation practices than less-used packages.)
+
+```{r grab-pkgs, cache = TRUE}
+# vector of core tidyverse packages from tidyverse GitHub repo
+tidy_core <- c("ggplot2", "tibble", "tidyr", "readr", 
+          "purrr", "dplyr", "stringr", "forcats")
+
+tidy_core
+
+# other tidy packages from the tidyverse website
+tidy_adjacent <- c("readxl", "haven", "googledrive",
+                "lubridate", "hms", "blob",
+                "magrittr", "glue", "broom")
+
+tidy_adjacent
+
+# non-tidyverse packages
+non_tidy_pkgs <- raw_pkgs$name[!(raw_pkgs$name %in% c(tidy_core, 
+                                                      tidy_adjacent))]
+
+# make a dataframe with all above packages, which "camp" they're from,
+# as well as their downloads in the last month.
+# pkgs_sum <- raw_pkgs$name %>%
+#   cran_downloads(., when = "last-month") %>%
+#   group_by(package) %>%
+#   summarize(downloads_last_month = sum(count)) %>%
+#   mutate(tidy_core = case_when(package %in% tidy_core ~ TRUE,
+#                                TRUE ~ FALSE))
+
+# the CRAN api isn't a fan of the above code... too many packages 
+# at once. break this up into smaller requests
+pkgs_sum <- tibble()
+i <- 1
+
+while (i <= length(raw_pkgs$name)) {
+  # check how close we are to grabbing all of them
+  if (i + 100 >= length(raw_pkgs$name)) {
+    # almost done! just grab the rest.
+    indices <- i:length(raw_pkgs$name)
+  } else {
+    # just grab 100 more
+    indices <- i:(i+99)
+  }
+  
+  # grab more package info
+  new_pkgs_sum <- raw_pkgs$name[indices] %>%
+    cran_downloads(., when = "last-month") %>%
+    group_by(package) %>%
+    summarize(downloads_last_month = sum(count)) %>%
+    mutate(camp = case_when(package %in% tidy_core ~ "tidy_core",
+                            package %in% tidy_adjacent ~ "tidy_adjacent",
+                            TRUE ~ "non_tidy"),
+           is_tidy = case_when(camp == "non_tidy" ~ FALSE,
+                               TRUE ~ TRUE))
+  
+  # and bind it to the main dataframe
+  pkgs_sum <- bind_rows(pkgs_sum, new_pkgs_sum)
+  
+  # increment i
+  i <- i + 100
+}
+
+# clean up the environment
+rm(i)
+rm(indices)
+rm(new_pkgs)
+rm(cran_pkgs)
+rm(new_pkgs_sum)
+
+# save the data!
+save(pkgs_sum, file = "data/packages_summary.Rda")
+```
+
+Now, we'll take a matched-pairs sample---we want the packages sampled from the non-tidyverse-core set to follow a similar distribution of usership to the tidyverse core packages.
+
+```{r take-pkg-sample}
+# for each package in the tidyverse, find the package in the
+# non-tidyverse with the most similar number of downloads
+
+# a vector of the number of downloads for tidy packages
+tidy_dls <- pkgs_sum$downloads_last_month[pkgs_sum$is_tidy]
+
+# a vector of the number of downloads for non-tidy packages
+non_tidy_dls <- pkgs_sum$downloads_last_month[(!pkgs_sum$is_tidy) & (pkgs_sum$package != "tidyverse")]
+
+# function to find the entry in a numeric vector that is closest
+# to a given number
+find_closest_entry <- function(number, vector) {
+  which(abs(number - vector) == min(abs(number - vector)))
+}
+
+# find the closest number of downloads in the non-tidy packages
+# to each of the tidy packages
+non_tidy_dls_matches <- map_dbl(tidy_dls, 
+                                find_closest_entry, 
+                                non_tidy_dls)
+
+# pull out the non-tidy packages with the closest number of downloads
+non_tidy_pkgs_sample <- pkgs_sum %>%
+  filter((!is_tidy) & (package != "tidyverse")) %>%
+  filter(., 1:nrow(.) %in% non_tidy_dls_matches)
+
+# put these datasets back together
+pkg_sum_sample <- pkgs_sum %>%
+  filter(is_tidy) %>%
+  bind_rows(., non_tidy_pkgs_sample)
+
+# save to export to Google Drive for additional data entry
+write_csv(pkg_sum_sample, path = "data/packages_summary_sample.csv")
+```
+
+Now, we want a list of all of the exported functions in each of the packages in our sample. 
+
+```{r function-level}
+# a vector of the sampled packages
+pkg_sample <- pkg_sum_sample$package
+
+# install all of the sampled packages
+needed_pkgs <- pkg_sample[!(pkg_sample %in% installed.packages()[,"Package"])]
+if(length(needed_pkgs) > 0) install.packages(needed_pkgs)
+
+# make a function that samples 4 functions from a packages' namespace
+grab_fxns <- function(package) {
+    # grab all functions within the package
+  pkg_namespace <- tryCatch(getNamespaceExports(package),
+                            error = function(e) {print(paste0("errored on ",
+                                                              package))})
+  # tryCatch will return an index if the call errored out
+  if (!is.numeric(pkg_namespace)) {
+    # make a tibble of the results
+    tibble(package = package,
+           fxn = pkg_namespace)
+  } else {
+    NULL
+  }
+}
+
+# run the function on each package, and then bind the tibbles together
+function_sample <- map(pkg_sample, grab_fxns) %>% 
+  bind_rows()
+
+# :-)
+head(function_sample)
+```
+
+Now, we write a function that, given a function and package name, summarizes the contents of the relevant helpfile. Then, we map the function over all packages sampled.
+
+```{r summarize-help}
+# write a function that, given a function (and package exporting it),
+# grabs some metrics about the structure of the help-file
+summarize_helpfile <- function(fun, package) {
+  
+  # grab the raw "help_files_with_topic" object -----------------------
+  helpfile <- tryCatch(help(topic = fun, 
+                            package = force(package), 
+                            help_type = "text"),
+                       error = function(e) {e})
+  
+  # if grabbing the helpfile errored out, return NULL
+  if (length(helpfile) == 0 | "error" %in% class(helpfile)) {
+    return(NULL)
+  }
+
+  # grab entire help-file as an .Rd -------------------------------------
+  helpfile <- Rd_fun(helpfile)
+
+  # grab the total character count in the helpfile ----------------------
+  n_char <- sum(nchar(helpfile))
+  
+  # grab the example lines, if they exist -------------------------------
+  example_lines <- tryCatch(Rdo_section(helpfile,
+                                        sec = "\\examples"),
+                            error = function(e) {e})
+  
+  if (!("error" %in% class(example_lines))) {
+    example_lines <- example_lines %>% unlist()
+  } else {
+    example_lines <- "NA"
+  }
+  
+  # count the number of occurences of the function name in the examples
+  n_function_examples <- str_detect(example_lines,
+                                    fun) %>%
+                         sum()
+  
+  # count the number of hashtags (as a proxy for number of comments) ---
+  n_example_comments <- str_detect(example_lines,
+                                   "#") %>%
+                        sum()
+  
+  # infer whether the function is deprecated or not -------------------
+  deprecated <- FALSE
+  
+  title_lines <-   tryCatch(Rdo_section(helpfile,
+                                        sec = "\\title"),
+                            error = function(e) {e})
+  
+  if (!("error" %in% class(title_lines))) {
+    n_deprecated <- title_lines %>% 
+      unlist() %>%
+      tolower() %>%
+      str_detect("deprecate") %>%
+      sum()
+    
+    if (n_deprecated > 0) {
+      deprecated <- TRUE
+    }
+  }
+  
+  desc_lines <-   tryCatch(Rdo_section(helpfile,
+                                       sec = "\\description"),
+                            error = function(e) {e})
+  
+  if (!("error" %in% class(desc_lines))) {
+    n_deprecated <- desc_lines %>% 
+      unlist() %>%
+      tolower() %>%
+      str_detect("deprecate") %>%
+      sum()
+    
+    if (n_deprecated > 0) {
+      deprecated <- TRUE
+    }
+  }
+  
+  # grab the number of functions described in the file -----------
+  usage_lines <-   tryCatch(Rdo_section(helpfile,
+                                        sec = "\\usage"),
+                            error = function(e) {e})
+  
+  if (!("error" %in% class(usage_lines))) {
+    usage_lines <- usage_lines %>%
+      unlist()
+    
+    n_functions <- length(usage_lines[usage_lines != "\n"])
+  } else {
+    n_functions <- NA
+  }
+  
+  # all ready! put together a table describing the help-file -----
+  tibble(name = fun,
+         package = force(package),
+         n_char = n_char,
+         n_examples = n_function_examples,
+         n_example_comments = n_example_comments,
+         n_functions = n_functions,
+         deprecated = deprecated)
+}
+
+
+# map over all values in the sample
+functions <- map2(function_sample$fxn,
+                  function_sample$package,
+                  summarize_helpfile) %>%
+  bind_rows()
+
+# save the results!!
+write_csv(functions, path = "data/functions.csv")
+```
+
+We also want some information on package-level documentation--package help-files and vignettes.
+
+```{r package-level}
+# read back in the package level data after adding more data
+packages <- read_csv("data/package_summary_sample_plus.csv")
+
+# make a function to count the number of vignettes in a package
+count_vignettes <- function(package) {
+    
+  vignettes <- browseVignettes(package)
+    
+  if (length(vignettes) != 0) {
+    length(vignettes[[1]][,1])
+  } else {
+    0
+  }
+}
+
+# count the vignettes in each of the sampled packages
+num_vignettes <- unlist(lapply(packages$package,
+                               count_vignettes))
+
+# add the number of vignettes onto the dataframe
+packages$num_vignettes <- num_vignettes
+
+# take a glimpse at the data
+head(packages)
+
+# write package level data to file
+write_csv(packages, "data/packages.csv")
+```
+
+

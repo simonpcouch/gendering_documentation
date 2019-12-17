@@ -1,0 +1,65 @@
+% load packages!
+\documentclass[12pt]{article}
+\usepackage{caption}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{indentfirst}
+\usepackage[margin=1in]{geometry}   
+\usepackage{placeins}
+\usepackage[square,sort,comma,numbers]{natbib}
+\usepackage{float}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{csquotes}
+\usepackage[stable]{footmisc}
+\usepackage{hyperref}
+
+% let's get this goin
+\begin{document}
+
+% make section headers less obnoxiously large, add italics
+\makeatletter
+\renewcommand\section{\@startsection {section}{1}{\z@}%
+                                     {-1.5ex\@plus -1ex \@minus -.2ex}%
+                                     {.75ex \@plus .2ex}%
+                                     {\normalfont\normalsize\bfseries}}% 
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+                                     {-1.0ex\@plus -1ex \@minus -.2ex}%
+                                     {.5ex \@plus .2ex}%
+                                     {\normalfont\normalsize\itshape}}%
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{\z@}%
+                                     {0 ex\@plus -.5ex \@minus -.1ex}%
+                                     {0 ex \@plus .1ex}%
+                                     {\normalfont\normalsize\itshape}}%
+\makeatother
+
+% add the title, author, date
+\title{\vspace{-10pt} Gender, Code Documentation, and Communities of Statistical Computing}
+       
+\author{\textit{Simon Couch—16 December 2019}}
+
+\date{}
+
+\maketitle
+
+% set spacing a bit larger
+\doublespace
+
+% input each section TeX file
+\input{Introduction.tex}
+\input{Literature-Review.tex}
+\input{Methods.tex}
+\input{Results.tex}
+\input{Discussion.tex}
+
+% add the bibliography
+\clearpage
+\bibliographystyle{plain}
+\bibliography{sources.bib}
+
+% and then the appendix!
+\clearpage
+\appendix
+\input{Appendix.tex}
+
+\end{document}
